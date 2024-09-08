@@ -1,0 +1,1014 @@
+---
+title: "Replication Paper"
+author: "Xiao Sun"
+date: "10/30/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(repr)
+# Change plot size to 16 x 9
+options(repr.plot.width=16, repr.plot.height=9)
+```
+
+# Title: Women and economic statecraft: The negative impact international economic sanctions visit on women
+
+#Notes: research 1971-2005, but dataset is 1970-2004. It is one year lagged.
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+## load pkgs and data
+library(dplyr)
+library(MASS) # for logit, help("polr")
+library(VGAM) # vglm
+library(ggplot2)
+library(nnet)
+library(lmtest)
+library(stargazer)
+library(texreg)
+library(xtable)
+library(haven) # for read_dta
+data <- read_dta("EJIR Full data.dta")
+str(data)
+names(data)
+glimpse(data)
+```
+
+The authors mentions that three CIRI variables: women's economic rights (wecon), women's social rights (wosoc), and women's political rights (wopol) are temporally dependent. So they follow Hafner-Burton’s lead and claim that they correct for the autocorrelation in the CIRI models by creating binary variables for each of the four categories of the women’s rights variables. But they do not use these binary variables as DVs. Instead, they still use original ordinal variables. So I will also use the original variables and then reorder them.
+
+## reorder ordinal DVs
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+data$wecon <- factor(data$wecon, levels = c("0", "1", "2", "3"), ordered = T)
+data$wosoc <- factor(data$wosoc, levels = c("0", "1", "2", "3"), ordered = T)
+data$wopol <- factor(data$wopol, levels = c("0", "1", "2", "3"), ordered = T)
+# check
+str(data$wecon)
+str(data$wosoc)
+str(data$wopol)
+```
+
+## Create lagged variables
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+str(data$lsanction_hse_dur) ## NULL, the authors did not include this variable in this dataset
+
+# create lag sanction_hse_dur
+#library("dplyr")
+data <- data %>%                            # Add lagged column, lag sanction_hse_dur
+  group_by(ccode) %>%
+  mutate( lsanction_hse_dur= lag(sanction_hse_dur, n = 1, default = NA)) %>% 
+  as.data.frame()
+
+str(data$lsanction_hse_dur)
+
+# compare the original variable and the lagged variable
+str(data$sanction_hse_dur)
+str(data$lsanction_hse_dur) # the first is NA 
+```
+
+The authors use a one-year lag (t − 1) of the time-variant variables to mitigate any simultaneity issues between the dependent and independent variables. Specifically, lagged-IVs allow they to make sure that the independent variables temporally precede the dependent variables and thus eliminate any incorrect direction of inference.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+## convert integers 0 and 1 to dummy variables/ nominal variables
+### check the attributes
+str(data$lsanction_hse) ## lagged sanction variable
+str(data$lagwar) ##  Interstate War
+str(data$lagcwar) ## Civil War
+str(data$multilateral)## Multilateral Sanction 
+str(data$laghumansanction)## Humanitarian Sanction 
+str(data$lagpolity2) ## nominal political scores, democracy -10~10
+
+## binary variables for 3 levels of women's economic rights
+#data$lwecon1 <- factor(data$lwecon1, levels = c("0", "1"))
+#data$lwecon2 <- factor(data$lwecon2, levels = c("0", "1"))
+#data$lwecon3 <- factor(data$lwecon3, levels = c("0", "1"))
+
+## binary variables for 3 levels of women's social rights
+#data$lwosoc1 <- factor(data$lwosoc1, levels = c("0", "1"))
+#data$lwosoc2 <- factor(data$lwosoc2, levels = c("0", "1"))
+#data$lwosoc3 <- factor(data$lwosoc3, levels = c("0", "1"))
+
+## binary variables for 3 levels of women's political rights
+#data$lwopol1 <- factor(data$lwopol1, levels = c("0", "1"))
+#data$lwopol2 <- factor(data$lwopol2, levels = c("0", "1"))
+#data$lwopol3 <- factor(data$lwopol3, levels = c("0", "1"))
+
+#data$lsanction_hse <- factor(data$lsanction_hse, levels = c("0", "1"))
+#data$lagwar <- factor(data$lagwar, levels = c("0", "1"))
+#data$lagcwar <- factor(data$lagcwar, levels = c("0", "1"))
+
+data$wecon <- factor(data$wecon, levels = c("0", "1", "2", "3"), ordered = T)
+data$wopol <- factor(data$wopol, levels = c("0", "1", "2", "3"), ordered = T)
+data$wosoc <- factor(data$wosoc, levels = c("0", "1", "2", "3"), ordered = T)
+
+## Areas
+data$asia <- factor(data$asia, levels = c("0", "1"))
+data$lamerica <-  factor(data$lamerica, levels = c("0", "1"))
+data$ssafrica <- factor(data$ssafrica, levels = c("0", "1"))
+data$nafrme <- factor(data$nafrme, levels = c("0", "1"))
+```
+
+## Explore data
+```{r}
+# 3 DVs, plots
+#jpeg(file="dvplote.jpeg")
+plot(data$wecon, main="women's eocnomic rights", col = "darkred")
+#dev.off()
+
+#jpeg(file="dvplotp.jpeg")
+plot(data$wopol, main="women's political rights", col = "darkgreen")
+#dev.off()
+
+#jpeg(file="dvplots.jpeg")
+plot(data$wosoc, main="women's social rights", col = "darkblue")
+#dev.off()
+
+se <- summary(data$wecon) 
+ss <- summary(data$wosoc)
+sp <- summary(data$wopol)
+
+
+stargazer(se, ss, sp, type = "text")
+```
+
+```{r}
+#IVs
+## economic sanction
+
+png(file="sanctionplot.png")
+summary(data$lsanction_hse)
+plot(data$lsanction_hse, type = "p", lwd = 0.5,
+     main="Sanction Plot",
+     xlab="A country in a year",
+     ylab="Sanction (dummy)") # most data are 0s
+dev.off()
+
+png(file="sanctioncost.png")
+plot(data$lagsanctioncost, type = "p", lwd = 0.5,
+     main="Sanction Cost Plot",
+     xlab="A country in a year",
+     ylab="Sanction Cost")
+dev.off()
+
+png(file="logGDP.png")
+plot(data$laggdplog, type = "p", lwd = 0.5,
+     main="Countries' GDP",
+     xlab="A country in a year",
+     ylab="Log of GDP")
+dev.off()
+
+png(file="polity.png")
+plot(data$lagpolity2, type = "p", lwd = 0.5,
+     main="Polity Scores",
+     xlab="A country in a year",
+     ylab="Political Score")
+dev.off()
+
+```
+
+
+
+# Creale Table 1  
+## My replication results are basically the same as the original results
+
+## Women's eoconomic status
+```{r warning=FALSE}
+
+## model 1
+modeco1 <- polr(wecon ~ lsanction_hse + lagsanctiongdp + laggdplog + lagsanctioncost + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme + lwecon1 + lwecon2 + lwecon3,  method = "logistic", data=data, Hess=T)
+
+# if delete " + lwecon1 + lwecon2 + lwecon3", is different.
+
+summary(modeco1)
+stargazer(modeco1,type='text') 
+
+## model 2: Duration, Duration*GDP Human Sanctions, and Multilateral sanctions
+modeco2 <- polr(wecon ~ laggdplog + lnsanction_hse_dur + lagsanctdurgdp + lagsanctioncost + lmultisanct + laghumansanction + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme + lwecon1 + lwecon2 + lwecon3, method ="logistic", data=data, Hess=T)
+
+summary(modeco2)
+stargazer(modeco2,type='text') ## the results are basically the same
+
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+## model 3
+
+### The authors use xtreg () in Stata for model 3 for fixed effects, so I will use plm() in R
+
+## install.packages("plm" )
+library("plm" )
+
+str(data$fem_labor_first) ## initial female labor score
+# fem.1 <- select(data1, 'fem_labor_first')
+# str(data1$wdifemlabor) ## The authors use DV d.wdifemlabor, but I only see wdifemlabor, I guess it is about differencing this variable.
+
+## They mentioned unit root issues: "diagnostic tests revealed that the Female Labor Participation variable has a strong unit root process. In order to correct for the lack of stationarity in this variable, we first-difference the data by subtracting the past value of the variable from the current value (Yt – Yt-1)."
+
+## create a new variable: d.wdifemlabor
+
+data <- data %>%                            # Add lagged column, lag wdifemlabor
+  group_by(ccode) %>%
+  dplyr::mutate(lwdifemlabor= dplyr::lag(wdifemlabor, n = 1, default = NA))
+
+data <- data %>%
+             mutate(d.wdifemlabor = wdifemlabor - lwdifemlabor)  # problem, this is calculated by 1970-2004 data minus 1969-2003 data. But instead it should be 1971-2005 - 1970-2004. The author did not provide me a complete dataset.
+
+data$wdifemlabor
+data$d.wdifemlabor
+
+modeco3 <- plm (d.wdifemlabor ~ lsanction_hse + lagsanctiongdp + laggdplog + lagsanctioncost + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme + fem_labor_first, data = data, index = c( "ccode", "year")) # I set index for state and year, but unsure if it's ok.
+summary(modeco3)
+stargazer(modeco3,type='text') # the result is different from the original table.
+
+## Model 4: Duration, Duration*GDP, Human Sanctions, and Multilateral sanctions
+modeco4 <-  plm(d.wdifemlabor ~ laggdplog + lnsanction_hse_dur + lagsanctdurgdp + lagsanctioncost + lmultisanct + laghumansanction + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme + fem_labor_first, data = data, index = c("ccode", "year")) # no area displays in the table and results are different.
+
+summary(modeco4)
+stargazer(modeco4,type='text')
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# All tables in Table 1
+stargazer(modeco1, modeco2,modeco3, modeco4,type='latex', digits = 3, no.space = TRUE,
+          column.sep.width = "1pt", font.size = "small",
+          title = "The effect of sanctions on women’s economic conditions",
+          dep.var.labels = c("Women's Economic Rights", "Female Labor Participation"),
+          covariate.labels = c("Economic Sanctions", "Sanction*GDP", "GDP Per Capita", "Sanction Duration", "Sanction Duration*GDP", "Sanction Costs", "Multilateral Sanction", "Humanitarian Sanction", "Democracy", "Economic Openess", "War", "Civil War", "Peace Years", "Asia/Pacific", "Latin America/Caribbean", "Sub-Saharan Africa", "M.East/N.Africa", "Initial Female Labor")) 
+```
+
+
+# Create Table 2: WOMEN'S SOCIAL AND POLITICAL STATUS
+```{r, warning=FALSE}
+## women's social rights
+## model 1
+modso1 <- polr(wosoc ~ lsanction_hse + lagsanctiongdp + laggdplog + lagsanctioncost + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme + lwosoc1 + lwosoc2 + lwosoc3, data=data, Hess=T)
+summary(modso1)
+stargazer(modso1,type='text') ## the results are basically the same
+
+## model 2: Duration, Duration*GDP, Human Sanctions, and Multilateral sanctions
+modso2 <- polr(wosoc ~ laggdplog + lnsanction_hse_dur + lagsanctdurgdp + lagsanctioncost + lmultisanct + laghumansanction + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme + lwosoc1 + lwosoc2 + lwosoc3, data=data, Hess=T)
+
+summary(modso2)
+stargazer(modso2,type='text') ## the results are basically the same
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+## women's political rights
+## model 1
+modpo1 <- polr(wopol ~ lsanction_hse + lagsanctiongdp + laggdplog + lagsanctioncost + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme + lwopol1 + lwopol2 + lwopol3, data=data, Hess=T) 
+
+summary(modpo1)
+stargazer(modpo1,type='text') ## the results are basically the same
+
+## model 2
+modpo2 <- polr(wopol ~ laggdplog + lnsanction_hse_dur + lagsanctdurgdp + lagsanctioncost + lmultisanct + laghumansanction + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme + lwopol1 + lwopol2 + lwopol3, data=data, Hess=T)
+
+summary(modpo2)
+stargazer(modpo2,type='text') ## the results are basically the same
+
+# All tables in Table 2
+
+stargazer(modso1, modso2,modpo1, modpo2, type='latex', digits = 3,no.space = TRUE,
+          column.sep.width = "1pt", font.size = "small",
+          title = "The effect of sanctions on women’s social and political conditions",
+          dep.var.labels = c("Women's Social Rights", "Women’s Political Rights"),
+          covariate.labels = c("Economic Sanctions", "Sanction*GDP", "GDP Per Capita", "Sanction Duration", "Sanction Duration*GDP", "Sanction Costs", "Multilateral Sanction", "Humanitarian Sanction", "Democracy", "Economic Openess", "War", "Civil War", "Peace Years", "Asia/Pacific", "Latin America/Caribbean", "Sub-Saharan Africa", "M.East/N.Africa")) 
+```
+
+# PRA test #
+```{r}
+library(brant)
+```
+
+### PRA test for model 1 and 2, women's economic rights
+```{r, warning=FALSE}
+
+# model 1 PRA test
+sink("modeco1pra.txt")
+brant(modeco1, by.var = T) # Omnibus, lsanction_hse, lagsanctiongdp, laggdplog, peace, asia, ssafrica, and nafrme violate PRA.
+sink()
+
+# model 2  PRA test
+sink("modeco2pra.txt")
+brant(modeco2, by.var = T) # Omnibus, laggdplog, laghumansanction, peace, asia,and ssafrica violate PRA.
+sink()
+```
+
+### PRA test for model 1 and 2, women's social rights
+```{r}
+# model 1 PRA test
+sink("modso1pra.txt")
+#brant(modso1, by.var = T) # Omnibus, laggdplog, lagpolity2, asia, ssafrica, and nafrme violate PRA.
+sink()
+
+# model 2  PRA test
+sink("modso2pra.txt")
+#brant(modso2, by.var = T) # Omnibus, laggdplog, lagpolity2, asia, ssafrica, and nafrme violate PRA.
+sink()
+```
+
+### PRA test for model 1 and 2, women's political rights. 
+```{r, warning=FALSE}
+# model 1 PRA test
+sink("modpo1pra.txt")
+library(brant)
+brant(modpo1, by.var = T) # Omnibus, laggdplog, lagpolity2, asia, ssafrica, nafrme, lwosoc1, 2,3 violate PRA
+sink()
+
+# model 2  PRA test
+sink("modpo2pra.txt")
+#brant(modpo2, by.var = T) # Omnibus, laggdplog, lagpolity2, asia, ssafrica, nafrme, lwosoc1, 2,3 violate PRA
+sink()
+```
+
+
+##dataset extension
+
+### note: try different variables : fertility, literacy_fem, unemploy_fem, agri_fem, indus_fem, serv_fem, vulemp_fem, seceducattained, terteducattained, spendedc. Only fertility and vulemp_fem have significance
+
+
+```{r}
+# add female fertility rate, female literacy rate, unemployment rate, female vulnerable employment rate, rate of female in industry, rate of female in service, rate of female in agriculture from the World Development Indicator of the World Bank.
+
+install.packages("WDI")
+library(WDI)
+newdt <- WDI(indicator = c("SP.DYN.TFRT.IN","SE.ADT.LITR.FE.ZS","SL.UEM.TOTL.FE.ZS", "SL.AGR.EMPL.FE.ZS", "SL.IND.EMPL.FE.ZS","SL.SRV.EMPL.FE.ZS","SL.EMP.VULN.FE.ZS"), start = 1970, end = 2004, extra = T)
+names(newdt)[which(names(newdt) == "SP.DYN.TFRT.IN")] <- "fertility"
+names(newdt)[which(names(newdt) == "SE.ADT.LITR.FE.ZS")] <- "literacy_fem"
+names(newdt)[which(names(newdt) == "SL.UEM.TOTL.FE.ZS")] <- "unemploy_fem"
+names(newdt)[which(names(newdt) == "SL.AGR.EMPL.FE.ZS")] <- "agri_fem"
+names(newdt)[which(names(newdt) == "SL.IND.EMPL.FE.ZS")] <- "indus_fem"
+names(newdt)[which(names(newdt) == "SL.SRV.EMPL.FE.ZS")] <- "serv_fem"
+names(newdt)[which(names(newdt) == "SL.EMP.VULN.FE.ZS")] <- "vulemp_fem"
+
+# merge datasets
+
+names(newdt)[which(names(newdt) == "iso3c")] <- "stateid"
+newdt1 <- subset(newdt, select = c(stateid, year, fertility, literacy_fem, unemploy_fem, agri_fem, indus_fem, serv_fem, vulemp_fem ))
+newdt2 <- newdt1[176:9310,]
+as.data.frame(newdt2)
+all<- merge(data, newdt2, by.x = c("stateid", "year"), by.y = c("stateid", "year"), all.y=T,all.x=F,sort=T)
+as.data.frame(all)
+
+```
+
+```{r}
+# rename public spending on education
+all <- all %>% 
+  rename(spendedc = public_spending_on_education__to)
+
+```
+
+
+### subset dataset
+```{r}
+# problem: different datasets cannot compare in likelihood ratio test
+# I have to use subset to create a new dataset for specific explanatory variables otherwise I will have 0 obs if I use na.omit for all the variables.
+library(dplyr)
+all.s <- subset(all, select = c( fertility, vulemp_fem, 
+         wecon, lwecon1, lwecon2, lwecon3,
+         wosoc, lwosoc1, lwosoc2, lwosoc3, 
+         wopol, lwopol1, lwopol2, lwopol3, 
+         lsanction_hse, laggdplog,lagsanctiongdp, lagsanctioncost,
+         lnsanction_hse_dur, lagsanctdurgdp, lmultisanct, laghumansanction,
+         lagpolity2, lagtradelog, lagwar, lagcwar, peace, 
+         asia, lamerica, ssafrica, nafrme))
+
+### lag one year for fertility and vulemp_fem
+all.s <- all.s %>%
+   mutate(lagfert = lag(fertility, n = 1, default = NA))
+
+all.s <- all.s %>%
+   mutate(lagvulempfem = lag(vulemp_fem, n = 1, default = NA))
+
+# delete missing values
+ all.s <- na.omit(all.s)
+```
+
+```{r}
+#check correlation for women's economic rights and female vulunrable employment
+wecon.num <- as.numeric(all.s$wecon)
+cor(wecon.num, all.s$vulemp_fem)
+```
+
+
+### vglm model 1, economic rights
+
+## note: add "lwecon1 + lwecon2 + lwecon3". lwecon0 is reference
+
+### fertility and vulnerable has three-star significant effect on model 1 and model 2.
+
+```{r}
+# use lagfert + lagvulempfem
+# vglm economic rights
+
+modeco1.vglm <- vglm(wecon ~ lsanction_hse + lagsanctiongdp + laggdplog + lagsanctioncost + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme + lwecon1 + lwecon2 + lwecon3, data=all.s, 
+                 family = cumulative(link= "logitlink", parallel = TRUE))
+
+# new vglm economic rights
+modeco1.vglm.new <- vglm(wecon ~ lagfert + lagvulempfem + lsanction_hse + lagsanctiongdp + laggdplog + lagsanctioncost + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme + lwecon1 + lwecon2 + lwecon3, data=all.s,family = cumulative(link= "logitlink", parallel = TRUE))
+
+## Check parallelism
+sink("modpo1vglm.test.txt")
+is.parallel(modeco1.vglm.new)
+sink
+
+# new tables
+library(texreg)
+texreg(list(modeco1.vglm, modeco1.vglm.new), include.ci = FALSE)
+
+# likelihood ratio test for differences in models
+library(lmtest)
+#lrtest(modeco1.vglm, modeco1.vglm.new) ## error
+
+library(nnet) 
+
+sink("lr.eco1.txt")
+anova(modeco1.vglm, modeco1.vglm.new, test.statistic="LR", type = 'I', error.estimate=c("pearson", "dispersion", "deviance")) # significance
+sink()
+
+
+## AIC
+AIC(modeco1.vglm) # 
+AIC(modeco1.vglm.new) #  this one is slightly better
+```
+
+### vglm model 2, economic rights
+
+```{r}
+# model 2
+# add lwosoc1 + lwosoc2 + lwosoc3
+# old
+modeco2.vglm <- vglm(wecon ~ laggdplog + lnsanction_hse_dur + lagsanctdurgdp + lagsanctioncost + lmultisanct + laghumansanction + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme +lwecon1 + lwecon2 + lwecon3, data=all.s, 
+            family = cumulative(link= "logitlink", parallel = TRUE))
+# delete " + lwecon1 + lwecon2 + lwecon3"
+
+# new
+modeco2.vglm.new <- vglm(wecon ~ lagfert + lagvulempfem + laggdplog + lnsanction_hse_dur + lagsanctdurgdp + lagsanctioncost + lmultisanct + laghumansanction + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme + lwecon1 + lwecon2 + lwecon3, data=all.s, 
+                        family = cumulative(link= "logitlink", parallel = TRUE))
+
+
+#tables
+texreg(list(modeco2.vglm, modeco2.vglm.new), include.ci = FALSE)
+
+# likelihood ratio test for differences in models
+
+# lrtest(modeco2.vglm, modeco2.vglm.new) # error
+
+sink("lr.eco2.txt")
+anova(modeco2.vglm, modeco2.vglm.new, test.statistic="LR", type = 'I', error.estimate=c("pearson", "dispersion", "deviance")) # significance
+sink()
+
+## AIC
+AIC(modeco2.vglm) 
+AIC(modeco2.vglm.new) # this ACI is smaller
+```
+
+
+## vglm model 1, political rights
+### fertility and has three-star signifcant influence and vulunrable has one star on model 1 and model 2
+```{r}
+# add lwopol1 + lwopol2+  lwopol3
+# vglm political rights
+modpo1.vglm <- vglm(wopol ~ lsanction_hse + lagsanctiongdp + laggdplog + lagsanctioncost + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme + lwopol1 + lwopol2+  lwopol3, data=all.s, 
+                 family = cumulative(link= "logitlink", parallel = TRUE))
+
+# new vglm political rights
+modpo1.vglm.new <- vglm(wopol ~ lagfert + lagvulempfem + lsanction_hse + lagsanctiongdp + laggdplog + lagsanctioncost + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme + lwopol1 + lwopol2+  lwopol3, data=all.s,family = cumulative(link= "logitlink", parallel = TRUE))
+
+## Check parallelism
+is.parallel(modpo1.vglm.new)
+
+# new tables
+library(texreg)
+texreg(list(modpo1.vglm, modpo1.vglm.new), include.ci = FALSE)
+
+# likelihood ratio test for differences in models
+#library(lmtest)
+#lrtest(modpo1.vglm, modpo1.vglm.new) # error: 'list' object cannot be coerced to type 'double'
+
+#library(nnet) 
+sink("lr.po1.txt")
+anova(modpo1.vglm, modpo1.vglm.new, test.statistic="LR", type = 'I', error.estimate=c("pearson", "dispersion", "deviance")) # significance difference
+sink()
+
+## AIC
+AIC(modpo1.vglm)
+AIC(modpo1.vglm.new) # this one is  better
+
+```
+
+### vglm model 2, political rights
+```{r, warning=FALSE}
+# model 2
+# old
+modpo2.vglm <- vglm(wopol ~ laggdplog + lnsanction_hse_dur + lagsanctdurgdp + lagsanctioncost + lmultisanct + laghumansanction + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme + lwopol1 + lwopol2+  lwopol3, data=all.s,
+            family = cumulative(link= "logitlink", parallel = TRUE))
+
+# new
+modpo2.vglm.new <- vglm(wopol ~ lagfert + lagvulempfem + laggdplog + lnsanction_hse_dur + lagsanctdurgdp + lagsanctioncost + lmultisanct + laghumansanction + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme + lwopol1 + lwopol2+  lwopol3, data=all.s, 
+                        family = cumulative(link= "logitlink", parallel = TRUE))
+
+
+#tables
+texreg(list(modpo2.vglm, modpo2.vglm.new), include.ci = FALSE)
+
+# likelihood ratio test for differences in models
+
+# lrtest(modpo2.vglm, modpo2.vglm.new) # error
+
+sink("lr.po2.txt")
+anova(modpo2.vglm, modpo2.vglm.new, test.statistic="LR", type = 'I', error.estimate=c("pearson", "dispersion", "deviance")) # significance
+sink()
+
+## AIC
+AIC(modpo2.vglm)
+AIC(modpo2.vglm.new) # this one is  better
+```
+
+## vglm model 1, social rights
+## add lwosoc1 + lwosoc2 + lwosoc3
+### fertility and vulunrable has three star
+```{r, warning=FALSE}
+# vglm model 1, social rights
+modso1.vglm <- vglm(wosoc ~ lsanction_hse + lagsanctiongdp + laggdplog + lagsanctioncost + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme + lwosoc1 + lwosoc2 + lwosoc3, data=all.s, 
+                 family = cumulative(link = "logitlink", parallel = TRUE))
+
+
+# add fertility, literacy_fem, vulemp_fem, serv_fem, indus_fem, agri_fem, vulemp_fem, seceducattained, terteducattained, spendedc 
+
+# new vglm model 1, social rights
+modso1.vglm.new <- vglm(wosoc ~ lagfert + lagvulempfem + lsanction_hse + lagsanctiongdp + laggdplog + lagsanctioncost + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme + lwosoc1 + lwosoc2 + lwosoc3, data=all.s, 
+                 family = cumulative(link = "logitlink", parallel = TRUE))
+
+# table
+texreg(list(modso1.vglm, modso1.vglm.new), include.ci = FALSE)
+
+# likelihood ratio test for differences in models
+
+## lrtest(modso1.vglm, modso1.vglm.new)
+sink("lr.so1.txt")
+anova(modso1.vglm, modso1.vglm.new, test.statistic="LR", type = 'I', error.estimate=c("pearson", "dispersion", "deviance")) # significance
+sink()
+
+## AIC
+AIC(modso1.vglm)
+AIC(modso1.vglm.new) # this one is smaller, so it is better
+```
+
+
+### vglm model 2, social rights
+```{r}
+# old vglm model 2, social rights
+modso2.vglm <- vglm(wosoc ~ laggdplog + lnsanction_hse_dur + lagsanctdurgdp + lagsanctioncost + lmultisanct + laghumansanction + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme + lwosoc1 + lwosoc2 + lwosoc3, data=all.s, 
+                 family = cumulative(link = "logitlink", parallel = TRUE, reverse = TRUE))
+
+# new  vglm model 2, social rights
+modso2.vglm.new <- vglm(wosoc ~ lagfert + lagvulempfem + laggdplog + lnsanction_hse_dur + lagsanctdurgdp + lagsanctioncost + lmultisanct + laghumansanction + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme + lwosoc1 + lwosoc2 + lwosoc3, data=all.s, 
+                 family = cumulative(link = "logitlink", parallel = TRUE, reverse = TRUE))
+
+# table
+texreg(list(modso2.vglm, modso2.vglm.new), include.ci = FALSE)
+
+# likelihood ratio test for differences in models
+
+# lrtest(modso2.vglm, modso2.vglm.new)
+sink("lr.so2.txt")
+anova(modso2.vglm, modso2.vglm.new, test.statistic="LR", type = 'I', error.estimate=c("pearson", "dispersion", "deviance")) # significance
+sink()
+
+## AIC
+AIC(modso2.vglm)
+AIC(modso2.vglm.new) # this one is smaller, so it is better
+
+```
+
+```{r}
+#calculate AIC and BIC
+# economic rights
+AIC(modeco1.vglm)
+AIC(modeco2.vglm)
+
+AIC(modeco1.vglm.new)
+AIC(modeco2.vglm.new)
+
+BIC(modeco1.vglm)
+BIC(modeco2.vglm)
+
+BIC(modeco1.vglm.new)
+BIC(modeco2.vglm.new)
+
+
+# social rights
+AIC(modso1.vglm)
+AIC(modso2.vglm)
+
+AIC(modso1.vglm.new)
+AIC(modso2.vglm.new)
+
+BIC(modso1.vglm)
+BIC(modso2.vglm)
+
+BIC(modso1.vglm.new)
+BIC(modso2.vglm.new)
+
+# political rights
+AIC(modpo1.vglm)
+AIC(modpo2.vglm)
+
+AIC(modpo1.vglm.new)
+AIC(modpo2.vglm.new)
+
+BIC(modpo1.vglm)
+BIC(modpo2.vglm)
+
+BIC(modpo1.vglm.new)
+BIC(modpo2.vglm.new)
+```
+
+
+## Create comparison tables
+## I get opposite results.Sanction is positively rather than negatively related to women's rights and GDP (the wealth of country) is negatively instead of positively related to women's rights. The authors' hypotheses may be not incorrect. But it is problematic to use CIRI human rights to measure women's well-being/status since the results do not make sense.
+
+economic rights
+```{r}
+# polr, old vglm, new vglm  for economic rights
+texreg(list(modeco1,modeco2, 
+            modeco1.vglm, modeco2.vglm,
+            modeco1.vglm.new, modeco2.vglm.new),
+       caption = "Women's Economic Rights Models",
+       caption.above = TRUE,
+       custom.model.names = c("Ord Logit 1",
+                              "Ord Logit 2",
+                              "Old VGLM 1",
+                              "Old VGLM 2",
+                              "New VGLM 1",
+                              "New VGLM 2"),
+      
+         custom.coef.names = c("Economic Sanctions", #1
+                             "Sanction*GDP", #2
+                             "GDP Per Capita", #3
+                             "Sanction Costs", #4
+                             "Democracy", #5
+                             "Economic Openess", #6
+                             "War", #7
+                             "Civil War", #8
+                             "Peace Years", #9
+                             "Asia/Pacific", #10
+                             "Latin America/Caribbean", #11
+                             "Sub-Saharan Africa", #12
+                             "M.East/NA.Africa", #13
+                             "Initial Female Labor", #14
+                             "Initial Female Labor2", #15
+                             "Initial Female Labor3", #16
+                             "N1", #17
+                             "N2", #18
+                             "N3", #19
+                             "Sanction Duration", #20
+                             "Sanction Duration*GDP", #21
+                             "Multilateral Sanction", #22
+                             "Humanitarian Sanction", #23
+                             "Constant1", #24
+                             "Constant2", #25
+                             "Constant3", #26
+                             "Fertility Rate", #27
+                             "Female Vulunrable Employment"), #28
+        reorder.coef = c(27:28,
+                         1:3,
+                         20:21,
+                         4,
+                         22:23,
+                         5:16,
+                         24:26,
+                         17:19),
+        scalebox = .8,
+       digits = 3,
+       center = TRUE,
+       leading.zero = TRUE,
+       custom.columns = NULL,
+       custom.col.pos = NULL,
+       ci.force = FALSE,
+        booktabs = TRUE,
+       dcolumn = TRUE,
+       sideways = FALSE,
+       longtable = FALSE,
+       use.packages = TRUE,
+       table = TRUE,
+       no.margin = FALSE,
+       fontsize = NULL,
+       float.pos = ""
+)
+```
+
+Political rights
+```{r}
+
+texreg(list(modpo1,modpo2, 
+            modpo1.vglm, modpo2.vglm,
+            modpo1.vglm.new, modpo2.vglm.new),
+       caption = "Women's Political Rights Models",
+       caption.above = TRUE,
+       custom.model.names = c("Ord Logit 1",
+                              "Ord Logit 2",
+                              "Old VGLM 1",
+                              "Old VGLM 2",
+                              "New VGLM 1",
+                              "New VGLM 2"),
+      
+         custom.coef.names = c("Economic Sanctions", #1
+                             "Sanction*GDP", #2
+                             "GDP Per Capita", #3
+                             "Sanction Costs", #4
+                             "Democracy", #5
+                             "Economic Openess", #6
+                             "War", #7
+                             "Civil War", #8
+                             "Peace Years", #9
+                             "Asia/Pacific", #10
+                             "Latin America/Caribbean", #11
+                             "Sub-Saharan Africa", #12
+                             "M.East/NA.Africa", #13
+                             "Initial Female Labor", #14
+                             "Initial Female Labor2", #15
+                             "Initial Female Labor3", #16
+                             "N1", #17
+                             "N2", #18
+                             "N3", #19
+                             "Sanction Duration", #20
+                             "Sanction Duration*GDP", #21
+                             "Multilateral Sanction", #22
+                             "Humanitarian Sanction", #23
+                             "Constant1", #24
+                             "Constant2", #25
+                             "Constant3", #26
+                             "Fertility Rate", #27
+                             "Female Vulunrable Employment"), #28
+        reorder.coef = c(27:28,
+                         1:3,
+                         20:21,
+                         4,
+                         22:23,
+                         5:16,
+                         24:26,
+                         17:19),
+        scalebox = .8,
+       digits = 3,
+       center = TRUE,
+       leading.zero = TRUE,
+       custom.columns = NULL,
+       custom.col.pos = NULL,
+       ci.force = FALSE,
+        booktabs = TRUE,
+       dcolumn = TRUE,
+       sideways = FALSE,
+       longtable = FALSE,
+       use.packages = TRUE,
+       table = TRUE,
+       no.margin = FALSE,
+       fontsize = NULL,
+       float.pos = ""
+)
+        
+
+
+```
+
+social rights
+```{r}
+texreg(list(modso1,modso2, 
+            modso1.vglm, modso2.vglm,
+            modso1.vglm.new, modso2.vglm.new),
+       caption = "Women's Social Rights Models",
+       caption.above = TRUE,
+       custom.model.names = c("Ord Logit 1",
+                              "Ord Logit 2",
+                              "Old VGLM 1",
+                              "Old VGLM 2",
+                              "New VGLM 1",
+                              "New VGLM 2"),
+      
+         custom.coef.names = c("Economic Sanctions", #1
+                             "Sanction*GDP", #2
+                             "GDP Per Capita", #3
+                             "Sanction Costs", #4
+                             "Democracy", #5
+                             "Economic Openess", #6
+                             "War", #7
+                             "Civil War", #8
+                             "Peace Years", #9
+                             "Asia/Pacific", #10
+                             "Latin America/Caribbean", #11
+                             "Sub-Saharan Africa", #12
+                             "M.East/NA.Africa", #13
+                             "Initial Female Labor", #14
+                             "Initial Female Labor2", #15
+                             "Initial Female Labor3", #16
+                             "N1", #17
+                             "N2", #18
+                             "N3", #19
+                             "Sanction Duration", #20
+                             "Sanction Duration*GDP", #21
+                             "Multilateral Sanction", #22
+                             "Humanitarian Sanction", #23
+                             "Constant1", #24
+                             "Constant2", #25
+                             "Constant3", #26
+                             "Fertility Rate", #27
+                             "Female Vulunrable Employment"), #28
+        reorder.coef = c(27:28,
+                         1:3,
+                         20:21,
+                         4,
+                         22:23,
+                         5:16,
+                         24:26,
+                         17:19),
+        scalebox = .8,
+       digits = 3,
+       center = TRUE,
+       leading.zero = TRUE,
+       custom.columns = NULL,
+       custom.col.pos = NULL,
+       ci.force = FALSE,
+        booktabs = TRUE,
+       dcolumn = TRUE,
+       sideways = FALSE,
+       longtable = FALSE,
+       use.packages = TRUE,
+       table = TRUE,
+       no.margin = FALSE,
+       fontsize = NULL,
+       float.pos = ""
+)
+```
+
+
+
+## note: I also take into account the dataset problems. I may miss some critical data or delete too many NAs, so that's why I got different results.To solve the possible data issues, I apply authors’ original dataset, the merged dataset, and the selected data of the merging dataset to the same VGLM model for economic rights. I get pretty similar results shown in the Table 6, which are all opposite to authors’ findings. Therefore, it is sufficient to believe that Cooper and Peksen may not have a good selection of models and measurement.
+
+
+## authors' dataset
+```{r}
+modeco1.vglm.t1 <- vglm(wecon ~ lsanction_hse + lagsanctiongdp + laggdplog + lagsanctioncost + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme, data=data, 
+                 family = cumulative(link= "logitlink", parallel = TRUE))
+```
+
+## merge dataset
+
+```{r}
+modeco1.vglm.t2 <- vglm(wecon ~ lsanction_hse + lagsanctiongdp + laggdplog + lagsanctioncost + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme, data=all, 
+                 family = cumulative(link= "logitlink", parallel = TRUE))
+```
+
+## selected merge dataset
+```{r}
+modeco1.vglm.t3 <- vglm(wecon ~ lsanction_hse + lagsanctiongdp + laggdplog + lagsanctioncost + lagpolity2 + lagtradelog + lagwar + lagcwar + peace + asia + lamerica + ssafrica + nafrme, data=all.s, 
+                 family = cumulative(link= "logitlink", parallel = TRUE))
+```
+
+```{r}
+library(texreg)
+texreg(list(modeco1.vglm.t1, modeco1.vglm.t2, modeco1.vglm.t3), include.ci = FALSE,
+       caption = "different datasets for women's economic rights model 1",
+       caption.above = TRUE,
+       scalebox = .8,
+       digits = 3,
+       center = TRUE,
+       leading.zero = TRUE,
+       custom.columns = NULL,
+       custom.col.pos = NULL,
+       ci.force = FALSE,
+        booktabs = TRUE,
+       dcolumn = TRUE,
+       sideways = FALSE,
+       longtable = FALSE,
+       use.packages = TRUE,
+       table = TRUE,
+       no.margin = FALSE,
+       fontsize = NULL,
+       float.pos = ""
+       )
+```
+
+
+## Model diagnostics
+
+### Working Residuals
+```{r}
+# economic rights models, working residuals
+resid.work.eco1<-resid(modeco1.vglm.new,type="working")
+resid.work.eco1[1:10]
+resid.work.eco2<-resid(modeco2.vglm.new,type="working")
+resid.work.eco2[1:10]
+
+# social rights models, working residuals
+resid.work.so1<-resid(modso1.vglm.new,type="working")
+resid.work.so1[1:10]
+resid.work.so2<-resid(modso2.vglm.new,type="working")
+resid.work.so2[1:10]
+
+# political rights models, working residuals
+resid.work.po1<-resid(modpo1.vglm.new,type="working")
+resid.work.po1[1:10]
+resid.work.po2<-resid(modpo2.vglm.new,type="working")
+resid.work.po2[1:10]
+```
+
+### Pearson residuals
+```{r}
+# economic rights models, Pearson residuals
+resid.pearson.eco1<-resid(modeco1.vglm.new,type="pearson")
+resid.pearson.eco1[1:10]
+
+resid.pearson.eco2<-resid(modeco2.vglm.new,type="pearson")
+resid.pearson.eco2[1:10]
+
+# social rights models, Pearson residuals
+resid.pearson.so1<-resid(modso1.vglm.new,type="pearson")
+resid.pearson.so1[1:10]
+
+resid.pearson.so2<-resid(modso2.vglm.new,type="pearson")
+resid.pearson.so2[1:10]
+
+# political rights models, Pearson residuals
+resid.pearson.po1<-resid(modpo1.vglm.new,type="pearson")
+resid.pearson.po1[1:10]
+
+resid.pearson.po2<-resid(modpo2.vglm.new,type="pearson")
+resid.pearson.po2[1:10]
+
+```
+
+### Response residuals
+```{r}
+## note: deviance residuals are nulls. weird... so I use response residuals
+
+# economic rights models, Response residuals
+resid.response.eco1<-resid(modeco1.vglm.new,type="response")
+resid.response.eco1[1:10]
+
+resid.response.eco2<-resid(modeco2.vglm.new,type="response")
+resid.response.eco2[1:10]
+
+# social rights models, Response residuals
+resid.response.so1<-resid(modso1.vglm.new,type="response")
+resid.response.so1[1:10]
+
+resid.response.so2<-resid(modso2.vglm.new,type="response")
+resid.response.so2[1:10]
+
+# political rights models, Response residuals
+resid.response.po1<-resid(modpo1.vglm.new,type="response")
+resid.response.po1[1:10]
+
+resid.response.po2<-resid(modpo2.vglm.new,type="response")
+resid.response.po2[1:10]
+```
+
+
+# plots the Pearson residuals versus the linear predictors (M plots) and plots the Pearson residuals versus the hat values (M plots)
+```{r}
+# plotvglm 
+#Thomas Yee, https://rdrr.io/cran/VGAM/man/plotvglm.html
+## plotvglm function plots the Pearson residuals versus the linear predictors (M plots) and plots the Pearson residuals versus the hat values (M plots).
+
+# economic rights models
+png(file="eco.resd.png")
+par(mfrow=c(1,1))
+## model 1
+plotvglm(modeco1.vglm.new, which = "(All)")
+## model 2
+plotvglm(modeco2.vglm.new, which = "(All)")
+dev.off()
+
+# social rights models
+png(file="so.resd.png")
+par(mfrow=c(1,1))
+## model 1
+plotvglm(modso1.vglm.new, which = "(All)")
+## model 2
+plotvglm(modso2.vglm.new, which = "(All)")
+dev.off()
+
+# political rights models
+png(file="po.resd.png")
+par(mfrow=c(1,1))
+## model 1
+plotvglm(modpo1.vglm.new, which = "(All)")
+## model 2
+plotvglm(modpo2.vglm.new, which = "(All)")
+dev.off()
+
+
+```
+
+
+
